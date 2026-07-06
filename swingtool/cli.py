@@ -30,6 +30,12 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Person detection confidence threshold.")
     analyze.add_argument("--overlay-min-score", type=float, default=0.3,
                          help="Hide keypoints below this score in the overlay.")
+
+    metrics = sub.add_parser("metrics", help="Compute swing metrics from keypoints.json.")
+    metrics.add_argument("keypoints", type=Path, help="Path to keypoints.json from `analyze`.")
+    metrics.add_argument("--output-dir", type=Path, default=Path("output"))
+    metrics.add_argument("--handed", choices=("right", "left"), default="right",
+                         help="Golfer handedness; sets lead/trail side (default: right).")
     return parser
 
 
@@ -59,6 +65,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Done. {detected} frames with a detected golfer.")
         print(f"  keypoints: {config.keypoints_path}")
         print(f"  overlay:   {config.overlay_path}")
+        return 0
+
+    if args.command == "metrics":
+        from swingtool.metrics import run_metrics_stage
+        from swingtool.metrics.summary import format_summary
+
+        try:
+            result = run_metrics_stage(args.keypoints, args.output_dir, handed=args.handed)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        print(f"Wrote {args.output_dir / 'metrics.json'}")
+        print(format_summary(result))
         return 0
 
     return 2
