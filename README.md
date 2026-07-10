@@ -68,26 +68,71 @@ The first run downloads ~500MB of model weights to the Hugging Face cache.
   left of the image (this is the mirror of a front-facing view; downstream
   metric code must not flip it).
 
+## Phase 2 — 2D swing metrics
+
+```powershell
+python -m swingtool metrics output\keypoints.json
+```
+
+Writes `output/metrics.json` (schema in `swingtool/metrics/schema.py`) and
+prints a summary: swing events (address/top/impact), tempo, head stability,
+knee flex, spine tilt. Every value carries a `quality` flag
+(`reliable` / `view_dependent` / `approximate_2d` / `low_confidence`) — no
+faked 3D.
+
+## Phase 3A — club/ball detection and club-path metrics
+
+Zero-shot detection with Grounding DINO (`IDEA-Research/grounding-dino-tiny`,
+Apache-2.0), then pure-geometry derivation, then the overlay:
+
+```powershell
+python -m swingtool detect samples\swing.mov output\keypoints.json   # -> detections.json
+python -m swingtool derive output\keypoints.json output\detections.json  # -> analysis.json
+python -m swingtool render-club samples\swing.mov output\analysis.json --keypoints output\keypoints.json
+```
+
+`analysis.json` (schema in `swingtool/analysis/schema.py`) holds the club-path
+trace, relative club speed, and ball position — each honestly flagged.
+
+**Honesty constraints baked in (these matter):**
+- Depth Anything / this pipeline give **relative**, not metric, information.
+  Club speed is reported in **body-lengths per second** (`relative_only`,
+  `coarse`) — **never mph/km·h⁻¹/m·s⁻¹**. The ~7-frame downswing at 30fps is
+  badly undersampled, so speed is a coarse window estimate, not a precise number.
+- **Gaps are never fabricated.** When detection fails (motion blur through the
+  downswing), the club point is `null`; only short gaps (≤3 frames) are
+  interpolated and flagged `interpolated`.
+- **Detection runs on CPU by default.** Grounding DINO's deformable-attention
+  `grid_sample` hits an illegal-memory-access on this torch/CUDA build; CPU is
+  correct and deterministic. `--device cuda` remains available. To stay
+  tractable (~15–18s/frame), detection is auto-scoped to the swing window via
+  the Phase-2 event detector.
+
 ## Tests
 
 ```powershell
 python -m pytest
 ```
 
-Tests cover streaming/stride logic, downscale coordinate mapping, the schema
-contract, and rendering — no GPU or model downloads needed.
+Tests cover streaming/stride logic, coordinate mapping, the schema contracts,
+2D-metric geometry, event detection on low-confidence gaps, and Phase-3
+club-path gap handling (asserting gaps are flagged, not fabricated, and that
+no physical-scale units appear). No GPU or model downloads needed.
 
 ## Layout
 
 ```
 swingtool/
   cli.py        argparse + dispatch only
-  config.py     run configuration, device resolution
-  schema.py     the pipeline contract (AnalysisResult)
+  schema.py     Phase-1 pose contract (AnalysisResult)
   ingest.py     streaming frame reader (never a whole clip in memory)
-  pose/         detection (RT-DETR) + keypoints (ViTPose), VRAM freed at stage end
-  render.py     skeleton overlay, streamed to disk
+  pose/         person detection (RT-DETR) + keypoints (ViTPose)
+  metrics/      Phase-2 2D swing metrics (pure geometry)
+  detect/       Phase-3 club/ball detection (Grounding DINO, CPU)
+  analysis/     Phase-3 club-path / speed / ball derivation (pure geometry)
+  render.py     skeleton + club-path/ball overlays, streamed to disk
 ```
 
-Future stages (depth, club detection, metrics, API) plug in after the pose
-stage and consume `AnalysisResult`.
+Models are Apache-2.0 only. Each model stage loads, runs, and frees VRAM
+before the next; depth and detection are never resident simultaneously.
+Phase 3B (depth: swing-plane + depth-assisted X-factor) plugs in next.
