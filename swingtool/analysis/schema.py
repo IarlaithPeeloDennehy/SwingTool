@@ -63,11 +63,18 @@ class RelativeClubSpeed(BaseModel):
     profile: list[MetricValue]   # per-step relative speed across the window
 
 
+class DepthAssisted(BaseModel):
+    """Approximate 3D-ish metrics from relative depth. Not true 3D."""
+    swing_plane_tilt: MetricValue     # how far the swing plane comes out of the image
+    xfactor: MetricValue              # hip/shoulder separation at the top
+
+
 class AnalysisSource(BaseModel):
     video: str
     keypoints_path: str
     detections_path: str
     detector_model: str
+    depth_model: Optional[str] = None
     handed: str
     body_scale_px: Optional[float]
 
@@ -78,3 +85,4 @@ class SwingAnalysis(BaseModel):
     club_path: list[ClubPathPoint]
     relative_club_speed: RelativeClubSpeed
     ball: BallInfo
+    depth_assisted: DepthAssisted

@@ -1,5 +1,5 @@
-# torch is installed separately from the CUDA index (see README):
-#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# torch + torchvision are installed separately from the CUDA index (see README):
+#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 transformers==5.13.0
 opencv-python==5.0.0.93
 numpy==2.2.6

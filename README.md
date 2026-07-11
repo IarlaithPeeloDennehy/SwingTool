@@ -94,6 +94,27 @@ python -m swingtool render-club samples\swing.mov output\analysis.json --keypoin
 `analysis.json` (schema in `swingtool/analysis/schema.py`) holds the club-path
 trace, relative club speed, and ball position — each honestly flagged.
 
+## Phase 3B — depth (swing plane + X-factor)
+
+Monocular relative depth with Depth Anything V2 **Small**
+(`depth-anything/Depth-Anything-V2-Small-hf`, Apache-2.0), then re-derive with
+depth to add the depth-assisted metrics:
+
+```powershell
+python -m swingtool depth samples\swing.mov output\keypoints.json output\detections.json  # -> depth_samples.json
+python -m swingtool derive output\keypoints.json output\detections.json --depth output\depth_samples.json
+```
+
+This adds `depth_assisted` to `analysis.json`: **swing-plane tilt** (how far the
+swing plane comes out of the 2D image) and **X-factor** (hip/shoulder
+separation at the top). Both are labeled `depth_assisted_approximate`.
+
+**Honesty:** Depth Anything outputs **relative, scale-free** depth — never
+metric distance. So swing plane and X-factor are *approximate orientation*, not
+true 3D, and are flagged as such. Only the **Small** checkpoint is used
+(Base/Large/Giant are CC-BY-NC). Depth runs on GPU (fp16); the low-res
+prediction is upscaled on CPU (a large GPU interpolate faults on this build).
+
 **Honesty constraints baked in (these matter):**
 - Depth Anything / this pipeline give **relative**, not metric, information.
   Club speed is reported in **body-lengths per second** (`relative_only`,
@@ -128,11 +149,12 @@ swingtool/
   ingest.py     streaming frame reader (never a whole clip in memory)
   pose/         person detection (RT-DETR) + keypoints (ViTPose)
   metrics/      Phase-2 2D swing metrics (pure geometry)
-  detect/       Phase-3 club/ball detection (Grounding DINO, CPU)
-  analysis/     Phase-3 club-path / speed / ball derivation (pure geometry)
+  detect/       Phase-3A club/ball detection (Grounding DINO, CPU)
+  depth/        Phase-3B monocular relative depth (Depth Anything V2 Small, GPU)
+  analysis/     Phase-3 derivation: club-path, speed, ball, swing-plane, X-factor
   render.py     skeleton + club-path/ball overlays, streamed to disk
 ```
 
 Models are Apache-2.0 only. Each model stage loads, runs, and frees VRAM
 before the next; depth and detection are never resident simultaneously.
-Phase 3B (depth: swing-plane + depth-assisted X-factor) plugs in next.
+Nothing derived from monocular depth claims a physical scale.

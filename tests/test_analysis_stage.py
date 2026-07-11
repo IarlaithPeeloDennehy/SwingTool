@@ -2,6 +2,7 @@ import json
 
 from swingtool.analysis import run_derive_stage
 from swingtool.analysis.schema import SwingAnalysis
+from swingtool.depth.schema import DepthResult, DepthSource, FrameDepth, KeypointDepth
 from swingtool.detect.schema import (
     BoxDet,
     DetectionSource,
@@ -65,12 +66,36 @@ def _make_detections():
         frames=frames)
 
 
-def _run(tmp_path):
+def _make_depth():
+    """Synthetic depth: right shoulder/hip closer than left (a rotation signal),
+    with more separation at the shoulders than hips (nonzero X-factor), and a
+    club depth that grows so the swing plane tilts out of the image."""
+    frames = []
+    for i in range(20, 51):
+        kps = [
+            KeypointDepth(name="left_shoulder", z=1.00), KeypointDepth(name="right_shoulder", z=1.40),
+            KeypointDepth(name="left_hip", z=1.00), KeypointDepth(name="right_hip", z=1.10),
+            KeypointDepth(name="left_wrist", z=1.2), KeypointDepth(name="right_wrist", z=1.2),
+        ]
+        frames.append(FrameDepth(frame_index=i, timestamp_s=i / 30.0, frame_median=1.0,
+                                 frame_scale=0.2, keypoints=kps, club_z=1.0 + 0.01 * i))
+    return DepthResult(
+        source=DepthSource(video="synthetic.mov", keypoints_path="k.json", detections_path="d.json",
+                           depth_model="depth-test", device="cpu", window_start=20, window_end=50,
+                           patch_radius=4),
+        frames=frames)
+
+
+def _run(tmp_path, with_depth=False):
     kp = tmp_path / "keypoints.json"
     det = tmp_path / "detections.json"
     kp.write_text(json.dumps(_make_keypoints().model_dump()), encoding="utf-8")
     det.write_text(json.dumps(_make_detections().model_dump()), encoding="utf-8")
-    return run_derive_stage(kp, det, tmp_path / "out", handed="right")
+    depth_path = None
+    if with_depth:
+        depth_path = tmp_path / "depth_samples.json"
+        depth_path.write_text(json.dumps(_make_depth().model_dump()), encoding="utf-8")
+    return run_derive_stage(kp, det, tmp_path / "out", handed="right", depth_path=depth_path)
 
 
 def test_output_validates_and_is_written(tmp_path):
@@ -105,3 +130,30 @@ def test_long_gap_preserved_as_holes(tmp_path):
 def test_ball_detected_at_address(tmp_path):
     analysis = _run(tmp_path)
     assert analysis.ball.address.x is not None        # persistent ball cluster found
+
+
+def test_without_depth_metrics_are_not_detected(tmp_path):
+    analysis = _run(tmp_path, with_depth=False)
+    assert analysis.depth_assisted.swing_plane_tilt.quality == "not_detected"
+    assert analysis.depth_assisted.xfactor.quality == "not_detected"
+    assert analysis.source.depth_model is None
+
+
+def test_with_depth_produces_approximate_metrics(tmp_path):
+    analysis = _run(tmp_path, with_depth=True)
+    sp = analysis.depth_assisted.swing_plane_tilt
+    xf = analysis.depth_assisted.xfactor
+    assert sp.value is not None and sp.quality == "depth_assisted_approximate"
+    assert xf.value is not None and xf.quality == "depth_assisted_approximate"
+    # shoulders rotated more than hips -> nonzero separation
+    assert abs(xf.value) > 0.0
+    assert analysis.source.depth_model == "depth-test"
+
+
+def test_depth_metrics_claim_no_physical_scale(tmp_path):
+    analysis = _run(tmp_path, with_depth=True)
+    blob = json.dumps(analysis.model_dump()).lower()
+    for bad in FORBIDDEN_UNITS:
+        assert bad not in blob
+    # depth-assisted values must be explicitly labelled approximate/not-3D
+    assert "not true 3d" in analysis.depth_assisted.swing_plane_tilt.notes.lower()

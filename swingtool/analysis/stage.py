@@ -20,10 +20,12 @@ from swingtool.analysis.schema import (
     BallAtAddress,
     BallInfo,
     ClubPathPoint,
+    DepthAssisted,
     MetricValue,
     RelativeClubSpeed,
     SwingAnalysis,
 )
+from swingtool.analysis.spatial import fit_plane_tilt, rotation_angle_top_down, xfactor
 from swingtool.detect.schema import DetectionsResult
 from swingtool.metrics.events import detect_events
 from swingtool.metrics.signals import (
@@ -98,8 +100,67 @@ def _launch_direction(frames_plain: list[dict], impact_fi: int,
                        notes="2D launch vs image-horizontal; single displaced detection, treat as rough")
 
 
+def _nd(unit: str, note: str) -> MetricValue:
+    return MetricValue(value=None, unit=unit, quality="not_detected", confidence=0.0, notes=note)
+
+
+def _z_to_px(z: float, fd, scale: float) -> float:
+    """Normalise a relative-depth sample within its frame and rescale to pixel-
+    comparable units so it can be mixed with x/y coordinates."""
+    body = scale if np.isfinite(scale) and scale > 0 else 1.0
+    return (z - fd.frame_median) / (fd.frame_scale or 1.0) * body
+
+
+def _depth_assisted(kp: AnalysisResult, depth: DepthResult, club: list[dict],
+                    window: tuple[int, int], scale: float) -> DepthAssisted:
+    dframes = {fd.frame_index: fd for fd in depth.frames}
+    club_xy = {p["frame_index"]: (p["x"], p["y"]) for p in club if p["x"] is not None}
+
+    # Swing plane: lift the club path with relative depth, fit a plane.
+    pts3d = []
+    for fi, fd in dframes.items():
+        if fd.club_z is None or fi not in club_xy:
+            continue
+        x, y = club_xy[fi]
+        pts3d.append((x, y, _z_to_px(fd.club_z, fd, scale)))
+    tilt, planarity = fit_plane_tilt(pts3d)
+    if tilt is None:
+        plane = _nd("deg", "too few depth-lifted club points to fit a plane")
+    else:
+        plane = MetricValue(
+            value=round(tilt, 1), unit="deg", quality="depth_assisted_approximate",
+            confidence=round(min(max(planarity, 0.0), 1.0), 3),
+            notes="angle the swing plane comes out of the 2D image, from RELATIVE "
+                  "depth; approximate, not true 3D")
+
+    # X-factor at the top of the backswing (window[0]).
+    top_fi = window[0]
+    fd = dframes.get(top_fi) or (min(dframes.values(), key=lambda d: abs(d.frame_index - top_fi))
+                                 if dframes else None)
+    xf_metric = _nd("deg", "no depth at the top-of-backswing frame")
+    pose_by_frame = {f.frame_index: f for f in kp.frames}
+    if fd is not None and fd.frame_index in pose_by_frame:
+        zmap = {k.name: k.z for k in fd.keypoints}
+        kx = {k.name: (k.x, k.y) for k in pose_by_frame[fd.frame_index].keypoints}
+        need = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+        if all(n in zmap and n in kx and np.isfinite(zmap[n]) for n in need):
+            sh = rotation_angle_top_down((kx["left_shoulder"][0], _z_to_px(zmap["left_shoulder"], fd, scale)),
+                                         (kx["right_shoulder"][0], _z_to_px(zmap["right_shoulder"], fd, scale)))
+            hp = rotation_angle_top_down((kx["left_hip"][0], _z_to_px(zmap["left_hip"], fd, scale)),
+                                         (kx["right_hip"][0], _z_to_px(zmap["right_hip"], fd, scale)))
+            xf = xfactor(sh, hp)
+            if xf is not None:
+                xf_metric = MetricValue(
+                    value=round(xf, 1), unit="deg", quality="depth_assisted_approximate",
+                    confidence=0.3,
+                    notes=f"hip/shoulder separation at top (frame {fd.frame_index}) from "
+                          "relative depth; approximate upgrade of the Phase-2 approximate_2d "
+                          "rotation; not true 3D")
+    return DepthAssisted(swing_plane_tilt=plane, xfactor=xf_metric)
+
+
 def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Path,
-                     handed: str = "right") -> SwingAnalysis:
+                     handed: str = "right", depth_path: Optional[Path] = None) -> SwingAnalysis:
     keypoints_path = Path(keypoints_path)
     detections_path = Path(detections_path)
     for p in (keypoints_path, detections_path):
@@ -142,6 +203,18 @@ def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Pa
     launch = _launch_direction(frames_plain, impact_fi,
                                ball_cluster if ball_cluster else None, scale)
 
+    depth_model = None
+    if depth_path is not None and Path(depth_path).exists():
+        from swingtool.depth.schema import DepthResult
+
+        depth = DepthResult.model_validate(json.loads(Path(depth_path).read_text(encoding="utf-8")))
+        depth_model = depth.source.depth_model
+        depth_assisted = _depth_assisted(kp, depth, club, window, scale)
+    else:
+        depth_assisted = DepthAssisted(
+            swing_plane_tilt=_nd("deg", "no depth stage run (see `depth` subcommand)"),
+            xfactor=_nd("deg", "no depth stage run (see `depth` subcommand)"))
+
     speed_quality = "coarse" if peak is not None else "not_detected"
     speed_note = ("relative units (body-lengths/s); COARSE - downswing is ~7 frames "
                   "at 30fps, badly undersampled; NOT a physical speed")
@@ -149,7 +222,8 @@ def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Pa
         source=AnalysisSource(
             video=det.source.video, keypoints_path=str(keypoints_path),
             detections_path=str(detections_path), detector_model=det.source.detector_model,
-            handed=handed, body_scale_px=(round(scale, 1) if np.isfinite(scale) else None)),
+            depth_model=depth_model, handed=handed,
+            body_scale_px=(round(scale, 1) if np.isfinite(scale) else None)),
         club_path=[ClubPathPoint(**p) for p in club],
         relative_club_speed=RelativeClubSpeed(
             window_frames=window,
@@ -162,6 +236,7 @@ def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Pa
                                  quality="coarse" if s["value"] is not None else "not_detected",
                                  confidence=s["confidence"], notes="") for s in steps]),
         ball=BallInfo(address=address_ball, launch_direction=launch),
+        depth_assisted=depth_assisted,
     )
 
     output_dir = Path(output_dir)

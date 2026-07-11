@@ -51,9 +51,18 @@ def build_parser() -> argparse.ArgumentParser:
     detect.add_argument("--end-frame", type=int, default=None,
                         help="Override auto swing-window end (frame index).")
 
-    derive = sub.add_parser("derive", help="Derive club/ball metrics from detections (pure geometry).")
+    depth = sub.add_parser("depth", help="Sample monocular relative depth at keypoints + club (Depth Anything).")
+    depth.add_argument("video", type=Path, help="Path to the input video.")
+    depth.add_argument("keypoints", type=Path, help="Path to keypoints.json.")
+    depth.add_argument("detections", type=Path, help="Path to detections.json from `detect`.")
+    depth.add_argument("--output-dir", type=Path, default=Path("output"))
+    depth.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+
+    derive = sub.add_parser("derive", help="Derive club/ball (+ depth-assisted) metrics (pure geometry).")
     derive.add_argument("keypoints", type=Path, help="Path to keypoints.json.")
     derive.add_argument("detections", type=Path, help="Path to detections.json from `detect`.")
+    derive.add_argument("--depth", type=Path, default=None,
+                        help="Optional depth_samples.json from `depth` (adds swing-plane + X-factor).")
     derive.add_argument("--output-dir", type=Path, default=Path("output"))
     derive.add_argument("--handed", choices=("right", "left"), default="right")
 
@@ -130,12 +139,29 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  club detected in {with_club}/{n} frames, ball in {with_ball}/{n}")
         return 0
 
+    if args.command == "depth":
+        from swingtool.depth import run_depth_stage
+
+        try:
+            depth = run_depth_stage(args.video, args.keypoints, args.detections,
+                                    args.output_dir, device=args.device)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        n = len(depth.frames)
+        with_club = sum(1 for f in depth.frames if f.club_z is not None)
+        print(f"Wrote {args.output_dir / 'depth_samples.json'}")
+        print(f"  depth sampled on {n} frames (club depth on {with_club})")
+        return 0
+
     if args.command == "derive":
         from swingtool.analysis import run_derive_stage
 
         try:
             analysis = run_derive_stage(args.keypoints, args.detections,
-                                        args.output_dir, handed=args.handed)
+                                        args.output_dir, handed=args.handed,
+                                        depth_path=args.depth)
         except (FileNotFoundError, ValueError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
@@ -145,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         interp = sum(1 for p in cp if p.interpolated)
         gaps = sum(1 for p in cp if p.x is None)
         speed = analysis.relative_club_speed.peak
+        da = analysis.depth_assisted
         print(f"Wrote {args.output_dir / 'analysis.json'}")
         print(f"  club path: {detected} detected, {interp} interpolated (short gaps), "
               f"{gaps} unfilled gaps of {len(cp)} frames")
@@ -152,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  peak relative club speed: {peak} [{speed.quality}]")
         print(f"  ball at address: {analysis.ball.address.quality}; "
               f"launch direction: {analysis.ball.launch_direction.quality}")
+        _fmt = lambda m: (f"{m.value} {m.unit}" if m.value is not None else "n/a")
+        print(f"  swing-plane tilt: {_fmt(da.swing_plane_tilt)} [{da.swing_plane_tilt.quality}]")
+        print(f"  X-factor (depth): {_fmt(da.xfactor)} [{da.xfactor.quality}]")
         return 0
 
     if args.command == "render-club":
