@@ -12,6 +12,9 @@ license = { text = "Apache-2.0" }
 [tool.setuptools.packages.find]
 include = ["swingtool*"]
 
+[tool.setuptools.package-data]
+"swingtool.report" = ["*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -66,6 +66,14 @@ def build_parser() -> argparse.ArgumentParser:
     derive.add_argument("--output-dir", type=Path, default=Path("output"))
     derive.add_argument("--handed", choices=("right", "left"), default="right")
 
+    report = sub.add_parser("report", help="Plain-language report vs cited reference ranges.")
+    report.add_argument("metrics", type=Path, help="Path to metrics.json from `metrics`.")
+    report.add_argument("--analysis", type=Path, default=None,
+                        help="Optional analysis.json (default: one next to the metrics file).")
+    report.add_argument("--output-dir", type=Path, default=Path("output"))
+    report.add_argument("--no-history", action="store_true",
+                        help="Don't append this swing to output/history.jsonl.")
+
     rclub = sub.add_parser("render-club", help="Render the club-path + ball overlay video.")
     rclub.add_argument("video", type=Path, help="Path to the input video.")
     rclub.add_argument("analysis", type=Path, help="Path to analysis.json from `derive`.")
@@ -182,6 +190,22 @@ def main(argv: list[str] | None = None) -> int:
         _fmt = lambda m: (f"{m.value} {m.unit}" if m.value is not None else "n/a")
         print(f"  swing-plane tilt: {_fmt(da.swing_plane_tilt)} [{da.swing_plane_tilt.quality}]")
         print(f"  X-factor (depth): {_fmt(da.xfactor)} [{da.xfactor.quality}]")
+        return 0
+
+    if args.command == "report":
+        from swingtool.report import run_report_stage
+        from swingtool.report.summary import format_report
+
+        try:
+            result = run_report_stage(args.metrics, args.output_dir,
+                                      analysis_path=args.analysis,
+                                      write_history=not args.no_history)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        print(f"Wrote {args.output_dir / 'report.json'}")
+        print(format_report(result))
         return 0
 
     if args.command == "render-club":

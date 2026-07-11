@@ -129,6 +129,33 @@ prediction is upscaled on CPU (a large GPU interpolate faults on this build).
   tractable (~15–18s/frame), detection is auto-scoped to the swing window via
   the Phase-2 event detector.
 
+## Phase 4 — swing report
+
+```powershell
+python -m swingtool report output\metrics.json
+```
+
+Compares the measured metrics against **cited** reference ranges and writes
+`output/report.json` plus a readable summary: highlights first, findings
+("worth a look") with the source for every threshold, a "measured, not judged"
+section for everything we refuse to threshold, fun facts, and limitations.
+
+- **Deterministic rules engine — no LLM decides anything.** Every finding
+  traces to a measured metric, a threshold from the versioned
+  `swingtool/report/references_v1.json`, and a citation (Novosel & Garrity
+  2004 for tempo; Hume, Keogh & Reid 2005 for lead-leg extension; McLean 1992 /
+  Myers et al. 2008 for X-factor). Numbers that are this project's tolerances
+  rather than the source's are flagged `tolerance_ours`.
+- **Quality flags gate findings.** `approximate_2d`, `depth_assisted_approximate`,
+  relative-only, and low-confidence metrics are suppressed (visibly, with the
+  reason) or hedged — never turned into confident sentences. Unsourceable
+  thresholds (head drift, spine tilt) are left out rather than guessed.
+- **Self-comparison:** each run appends to `output/history.jsonl`; later runs
+  open with progress vs your own last swing (`--no-history` to skip).
+- This is observations from **one swing, one camera, 30fps** — not a diagnosis,
+  and **not a substitute for a qualified coach or a launch monitor**. The
+  report says so itself.
+
 ## Tests
 
 ```powershell
@@ -152,6 +179,7 @@ swingtool/
   detect/       Phase-3A club/ball detection (Grounding DINO, CPU)
   depth/        Phase-3B monocular relative depth (Depth Anything V2 Small, GPU)
   analysis/     Phase-3 derivation: club-path, speed, ball, swing-plane, X-factor
+  report/       Phase-4 deterministic report engine + cited reference config
   render.py     skeleton + club-path/ball overlays, streamed to disk
 ```
 

@@ -1,0 +1,40 @@
+{
+  "reference_version": "1.0",
+  "comment": "Every entry MUST carry a real citation. tolerance_ours=true marks numbers that are this project's tolerance/noise-floor choices layered on top of the cited observation - not values from the source itself. If a threshold cannot be sourced, it does not belong in this file.",
+  "entries": {
+    "tempo_ratio": {
+      "unit": "ratio",
+      "center": 3.0,
+      "range": [2.5, 3.5],
+      "source": "Novosel & Garrity, Tour Tempo (Doubleday, 2004): tour-player video frame counts 18/6, 21/7, 24/8, 27/9 - all 3.0:1",
+      "source_type": "literature",
+      "tolerance_ours": true,
+      "notes": "The 3:1 center is Novosel's published observation. The +/-0.5 band is this project's tolerance; the source reports elite clustering at 3:1 and amateurs commonly at 2:1 or below, not a cutoff."
+    },
+    "downswing_duration": {
+      "unit": "s",
+      "range": [0.2, 0.3],
+      "source": "Novosel & Garrity, Tour Tempo (Doubleday, 2004): tour downswings of 6-9 frames at 30 fps",
+      "source_type": "literature",
+      "tolerance_ours": false,
+      "notes": "Range read directly from the published tour frame counts (6-9 frames at 30 fps = 0.20-0.30 s)."
+    },
+    "lead_knee_extension": {
+      "unit": "deg_change",
+      "direction": "increase",
+      "min_change": 5.0,
+      "source": "Hume, Keogh & Reid, 'The Role of Biomechanics in Maximising Distance and Accuracy of Golf Shots', Sports Medicine 35(5), 2005: describes lead-leg extension ('posting up') through impact in skilled golfers",
+      "source_type": "literature",
+      "tolerance_ours": true,
+      "notes": "Directional rule only: our knee angle is a 2D projection (view-dependent), and a direction of change survives projection where a magnitude does not. The +5 deg minimum change is this project's noise floor, not from the source."
+    },
+    "xfactor": {
+      "unit": "deg",
+      "range": [40.0, 60.0],
+      "source": "McLean, 'Widen the Gap', Golf Magazine (1992); Myers et al., Journal of Sports Sciences 26(2), 2008: hip-shoulder separation around 45-50 deg in skilled golfers",
+      "source_type": "literature",
+      "tolerance_ours": true,
+      "notes": "Published values vary by measurement method, so the band is kept wide. Our depth-assisted estimate is approximate and normally fails the quality gate - this entry exists for when measurement improves."
+    }
+  }
+}
