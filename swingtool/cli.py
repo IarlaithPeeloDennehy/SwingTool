@@ -80,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
     rclub.add_argument("--keypoints", type=Path, default=None,
                        help="Optional keypoints.json to underlay a faint skeleton.")
     rclub.add_argument("--output", type=Path, default=Path("output/overlay_club.mp4"))
+    rclub.add_argument("--endcard-seconds", type=float, default=2.5,
+                       help="Seconds to hold the predicted-shot end-card (0 to disable).")
     return parser
 
 
@@ -190,6 +192,12 @@ def main(argv: list[str] | None = None) -> int:
         _fmt = lambda m: (f"{m.value} {m.unit}" if m.value is not None else "n/a")
         print(f"  swing-plane tilt: {_fmt(da.swing_plane_tilt)} [{da.swing_plane_tilt.quality}]")
         print(f"  X-factor (depth): {_fmt(da.xfactor)} [{da.xfactor.quality}]")
+        if analysis.ball_flight is not None:
+            ss = analysis.ball_flight.shot_shape
+            obs = len(analysis.ball_flight.observed)
+            print(f"  predicted shot: {ss.shape or 'undetermined'} "
+                  f"[{ss.quality}, conf {ss.confidence}] "
+                  f"({obs} ball(s) tracked in flight)")
         return 0
 
     if args.command == "report":
@@ -214,7 +222,8 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             out = render_club_overlay(args.video, args.analysis, args.output,
-                                      keypoints_path=args.keypoints)
+                                      keypoints_path=args.keypoints,
+                                      endcard_seconds=args.endcard_seconds)
         except (FileNotFoundError, VideoIngestError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1

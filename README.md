@@ -129,6 +129,41 @@ prediction is upscaled on CPU (a large GPU interpolate faults on this build).
   tractable (~15–18s/frame), detection is auto-scoped to the swing window via
   the Phase-2 event detector.
 
+## Phase 3C — ball flight & shot shape (predicted)
+
+`derive` also produces a `ball_flight` block, and `render-club` draws a
+broadcast-style tracer plus an end-card naming the shot
+(**slice / hook / fade / draw / straight**):
+
+```powershell
+python -m swingtool render-club samples\swing.mov output\analysis.json --keypoints output\keypoints.json
+```
+
+- **Solid magenta** = the ball where it was *actually detected* after impact.
+  Usually 0–3 points — the ball leaves frame in ~1–2 blurred frames — and a
+  static tee/range ball is explicitly rejected (it isn't flight).
+- **Dashed orange** = a **modelled** predicted arc. Drawn dashed on purpose so
+  it never reads as a tracked ball. Image-space only; no distance/scale.
+- **End-card** = the predicted shot shape, held for `--endcard-seconds` (2.5 by
+  default; `0` disables).
+
+**Honesty — read this before showing it to anyone.** Shot shape is driven by
+**club face-to-path angle and spin**, which a launch monitor measures directly
+and which this pipeline does **not** measure. The label is a *model estimate*
+from weak 2D proxies:
+
+- start direction (≈ face) from the first displaced post-impact ball, when we
+  get one;
+- club-path lean from the 2D club-head trace through impact;
+- shape from `start − path` via the standard ball-flight relationship, with
+  our own coarse curvature tolerances (`tolerance_ours`).
+
+Every value is flagged `model_estimate` with low confidence, and the end-card
+says on-screen that curvature/spin are not measured and to confirm with a
+launch monitor. When the ball is never seen in flight, the arc falls back to a
+square-face prior (shape from path alone) at even lower confidence — clearly
+flagged. **This is a visual estimate for demos, not a launch-monitor reading.**
+
 ## Phase 4 — swing report
 
 ```powershell
@@ -178,7 +213,8 @@ swingtool/
   metrics/      Phase-2 2D swing metrics (pure geometry)
   detect/       Phase-3A club/ball detection (Grounding DINO, CPU)
   depth/        Phase-3B monocular relative depth (Depth Anything V2 Small, GPU)
-  analysis/     Phase-3 derivation: club-path, speed, ball, swing-plane, X-factor
+  analysis/     Phase-3 derivation: club-path, speed, ball, swing-plane, X-factor,
+                ball-flight prediction + shot-shape estimate (ballflight.py)
   report/       Phase-4 deterministic report engine + cited reference config
   render.py     skeleton + club-path/ball overlays, streamed to disk
 ```

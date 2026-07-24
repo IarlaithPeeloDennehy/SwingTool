@@ -15,14 +15,24 @@ from swingtool.analysis.clubpath import (
     select_club_path,
     smooth_club_path,
 )
+from swingtool.analysis.ballflight import (
+    classify_shape,
+    estimate_path_direction,
+    estimate_start_direction,
+    predict_trajectory,
+)
 from swingtool.analysis.schema import (
     AnalysisSource,
     BallAtAddress,
+    BallFlight,
     BallInfo,
     ClubPathPoint,
     DepthAssisted,
     MetricValue,
+    ObservedBallPoint,
+    PredictedPoint,
     RelativeClubSpeed,
+    ShotShape,
     SwingAnalysis,
 )
 from swingtool.analysis.spatial import fit_plane_tilt, rotation_angle_top_down, xfactor
@@ -102,6 +112,99 @@ def _launch_direction(frames_plain: list[dict], impact_fi: int,
 
 def _nd(unit: str, note: str) -> MetricValue:
     return MetricValue(value=None, unit=unit, quality="not_detected", confidence=0.0, notes=note)
+
+
+def _post_impact_balls(frames_plain: list[dict], impact_fi: int,
+                       address_ball: Optional[dict], body_scale_px: float,
+                       max_after: int = 10) -> list[dict]:
+    """Real ball detections after impact that are the struck ball IN FLIGHT.
+
+    Down-the-line footage often has extra stationary balls (the tee ball, range
+    balls on the grass). A post-impact detection only counts as flight if it is
+    (a) clearly displaced from the address ball AND (b) not sitting on any
+    stationary cluster that already existed before impact - otherwise a static
+    range ball would be mislabelled as the struck ball's flight. Usually returns
+    0-3 points because the ball leaves frame fast; that emptiness is honest."""
+    from swingtool.analysis.clubpath import cluster_balls
+
+    if address_ball is None:
+        return []
+    ax, ay = address_ball["x"], address_ball["y"]
+    scale = body_scale_px if np.isfinite(body_scale_px) and body_scale_px > 0 else 40.0
+    min_disp = 0.5 * scale
+    near = max(30.0, 0.35 * scale)
+
+    # Centres of balls that sit still through the pre-impact frames (tee/range).
+    stationary = [(c["x"], c["y"]) for c in cluster_balls(frames_plain)
+                  if any(f <= impact_fi for f in c["frames"])]
+
+    out: list[dict] = []
+    for fr in frames_plain:
+        fi = fr["frame_index"]
+        if not (impact_fi < fi <= impact_fi + max_after):
+            continue
+        best = None
+        best_d = min_disp
+        for b in fr["ball"]:
+            cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+            if any(np.hypot(cx - sx, cy - sy) <= near for sx, sy in stationary):
+                continue                              # a static ball, not flight
+            d = float(np.hypot(cx - ax, cy - ay))
+            if d > best_d:
+                best_d, best = d, (cx, cy, b[4])
+        if best is not None:
+            out.append({"frame_index": fi, "x": best[0], "y": best[1], "confidence": best[2]})
+    return out
+
+
+def _ball_flight(frames_plain: list[dict], club: list[dict], impact_fi: int,
+                 address_ball: Optional[dict], body_scale_px: float,
+                 width: int, height: int, handed: str) -> BallFlight:
+    """Assemble the honest ball-flight block: real post-impact detections, a
+    MODELLED predicted arc, and a low-confidence shot-shape estimate."""
+    scale = body_scale_px if np.isfinite(body_scale_px) and body_scale_px > 0 else float("nan")
+    observed = _post_impact_balls(frames_plain, impact_fi, address_ball, scale)
+
+    addr_pt = (address_ball["x"], address_ball["y"]) if address_ball else None
+    start_deg, start_conf, start_note = estimate_start_direction(addr_pt, observed)
+    path_deg, path_conf, path_note = estimate_path_direction(club, impact_fi, scale)
+    shape, f2p, shape_conf, shape_note = classify_shape(start_deg, path_deg, handed)
+
+    shot = ShotShape(
+        shape=shape, handed=handed,
+        start_direction=MetricValue(
+            value=(round(start_deg, 1) if start_deg is not None else None), unit="deg",
+            quality="model_estimate" if start_deg is not None else "not_detected",
+            confidence=round(start_conf, 3), notes=start_note),
+        club_path_direction=MetricValue(
+            value=(round(path_deg, 1) if path_deg is not None else None), unit="deg",
+            quality="model_estimate" if path_deg is not None else "not_detected",
+            confidence=round(path_conf, 3), notes=path_note),
+        face_to_path=MetricValue(
+            value=f2p, unit="deg",
+            quality="model_estimate" if shape is not None else "not_detected",
+            confidence=round(shape_conf, 3), notes=shape_note),
+        confidence=round(shape_conf, 3),
+        quality="model_estimate" if shape is not None else "not_detected",
+        notes="shot shape is a MODEL ESTIMATE from start direction + club path; "
+              "face angle and spin are not measured - confirm with a launch monitor")
+
+    # Predict from the last observed ball if we have one, else from the tee ball.
+    launch_pt = (observed[-1]["x"], observed[-1]["y"]) if observed else addr_pt
+    predicted: list[PredictedPoint] = []
+    if launch_pt is not None and shape is not None:
+        arc = predict_trajectory(launch_pt, start_deg, f2p, width, height, scale)
+        predicted = [PredictedPoint(x=round(x, 1), y=round(y, 1)) for x, y in arc]
+
+    if not observed and not predicted:
+        note = "ball never tracked in flight and no basis to predict"
+    elif not observed:
+        note = "flight not observed; arc is a MODEL prediction from the swing"
+    else:
+        note = f"{len(observed)} real post-impact detection(s) + predicted continuation"
+
+    return BallFlight(impact_frame=impact_fi, observed=[ObservedBallPoint(**o) for o in observed],
+                      predicted=predicted, shot_shape=shot, notes=note)
 
 
 def _z_to_px(z: float, fd, scale: float) -> float:
@@ -203,6 +306,10 @@ def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Pa
     launch = _launch_direction(frames_plain, impact_fi,
                                ball_cluster if ball_cluster else None, scale)
 
+    addr_dict = ({"x": ball_cluster["x"], "y": ball_cluster["y"]} if ball_cluster else None)
+    ball_flight = _ball_flight(frames_plain, club, impact_fi, addr_dict, scale,
+                               kp.video.width, kp.video.height, handed)
+
     depth_model = None
     if depth_path is not None and Path(depth_path).exists():
         from swingtool.depth.schema import DepthResult
@@ -237,6 +344,7 @@ def run_derive_stage(keypoints_path: Path, detections_path: Path, output_dir: Pa
                                  confidence=s["confidence"], notes="") for s in steps]),
         ball=BallInfo(address=address_ball, launch_direction=launch),
         depth_assisted=depth_assisted,
+        ball_flight=ball_flight,
     )
 
     output_dir = Path(output_dir)

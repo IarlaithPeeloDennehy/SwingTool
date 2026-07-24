@@ -132,6 +132,21 @@ def test_ball_detected_at_address(tmp_path):
     assert analysis.ball.address.x is not None        # persistent ball cluster found
 
 
+def test_ball_flight_present_and_honestly_flagged(tmp_path):
+    analysis = _run(tmp_path)
+    bf = analysis.ball_flight
+    assert bf is not None
+    ss = bf.shot_shape
+    # A shape may be predicted, but it must be a low-confidence model estimate,
+    # never dressed up as a measurement.
+    assert ss.quality in ("model_estimate", "not_detected")
+    assert ss.confidence <= 0.4
+    assert "launch monitor" in ss.notes.lower()
+    # No post-impact frames in the synthetic clip -> nothing tracked in flight,
+    # and the honest record says so rather than inventing detections.
+    assert bf.observed == []
+
+
 def test_without_depth_metrics_are_not_detected(tmp_path):
     analysis = _run(tmp_path, with_depth=False)
     assert analysis.depth_assisted.swing_plane_tilt.quality == "not_detected"

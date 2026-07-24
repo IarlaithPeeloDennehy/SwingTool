@@ -17,11 +17,15 @@ ANALYSIS_SCHEMA_VERSION = "1.0"
 # relative_only               - normalised/relative units; NOT a physical scale
 # coarse                      - severely undersampled (e.g. ~7-frame downswing)
 # depth_assisted_approximate  - lifted with relative depth; not true 3D (Phase 3B)
+# model_estimate              - a MODELLED prediction from weak proxies, NOT a
+#                               measurement (e.g. shot shape / predicted flight);
+#                               always low confidence, confirm with a launch monitor
 # not_detected                - the model could not find it; deliberately empty
 # low_confidence              - present but weakly supported
 Quality = Literal[
     "reliable_2d", "relative_only", "coarse",
-    "depth_assisted_approximate", "not_detected", "low_confidence",
+    "depth_assisted_approximate", "model_estimate",
+    "not_detected", "low_confidence",
 ]
 
 
@@ -69,6 +73,47 @@ class DepthAssisted(BaseModel):
     xfactor: MetricValue              # hip/shoulder separation at the top
 
 
+class ObservedBallPoint(BaseModel):
+    """A REAL post-impact ball detection (magenta solid tracer). May be empty -
+    the ball usually leaves frame in 1-2 blurred frames."""
+    frame_index: int
+    x: float
+    y: float
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class PredictedPoint(BaseModel):
+    """A point on the MODELLED flight arc (image pixels). Visualisation only -
+    not a tracked ball position and carries no physical scale."""
+    x: float
+    y: float
+
+
+class ShotShape(BaseModel):
+    """MODEL ESTIMATE of shot shape. Shape is driven by face-to-path angle and
+    spin, which we do NOT measure; this is inferred from weak 2D proxies and is
+    always low confidence. `shape` is one of draw/fade/hook/slice/straight."""
+    shape: Optional[str]
+    handed: str
+    start_direction: MetricValue      # deg, + = started right of target (~face)
+    club_path_direction: MetricValue  # deg, + = club moving right through impact
+    face_to_path: MetricValue         # deg, drives the curvature
+    confidence: float = Field(ge=0.0, le=1.0)
+    quality: Quality
+    notes: str = ""
+
+
+class BallFlight(BaseModel):
+    """Post-impact ball flight: the honestly-detected points, a modelled
+    predicted arc, and the shot-shape estimate. Everything predicted is flagged
+    `model_estimate` - confirm shape/curve with a launch monitor."""
+    impact_frame: Optional[int]
+    observed: list[ObservedBallPoint]
+    predicted: list[PredictedPoint]
+    shot_shape: ShotShape
+    notes: str = ""
+
+
 class AnalysisSource(BaseModel):
     video: str
     keypoints_path: str
@@ -86,3 +131,4 @@ class SwingAnalysis(BaseModel):
     relative_club_speed: RelativeClubSpeed
     ball: BallInfo
     depth_assisted: DepthAssisted
+    ball_flight: Optional[BallFlight] = None
